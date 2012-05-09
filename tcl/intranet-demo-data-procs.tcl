@@ -11,7 +11,7 @@ ad_library {
 
 
 
-ad_proc im_demo_create_beaches {
+ad_proc im_demo_data_create_beaches {
     -day:required
 } {
     The "Beach" are the projects for non-productive hours.
@@ -124,7 +124,133 @@ ad_proc im_demo_create_beaches {
 }
 
 
-ad_proc im_demo_log_timesheet_hours {
+
+
+ad_proc im_demo_data_project_work_hours {
+    -project_id:required
+} {
+    Returns the accumulated estimated_hours of a project.
+} {
+    return [util_memoize [list im_demo_data_project_work_hours_helper -project_id $project_id]]
+}
+
+ad_proc im_demo_data_project_work_hours_helper {
+    -project_id:required
+} {
+    Returns the accumulated estimated_hours of a project.
+} {
+    set work_hours_sql "
+	select	sum(planned_units * uom_factor) from (
+	select	t.planned_units,
+		CASE WHEN t.uom_id = 321 THEN 8.0 ELSE 1.0 END as uom_factor
+	from	im_projects main_p,
+		im_projects sub_p,
+		im_timesheet_tasks t
+	where	main_p.project_id = :project_id and
+		sub_p.project_id = t.task_id and
+		sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
+	) t
+    "
+
+    return [db_string estimated_hours $work_hours_sql]
+}
+
+
+ad_proc im_demo_data_company_load {
+    -start_date:required
+    -end_date:required
+} {
+    Calculates the average work load for the entire company in the 
+    specified date interval. These values are used later to calculate
+    where to place new projects.
+} {
+    # -----------------------------------------------------
+    # Check the average work load for the next days
+
+    set workload_sql "
+select	sum(estimated_days / project_duration_days) as project_work,
+	day
+from	(
+    	select	day.day,
+		main_p.project_id,
+		main_p.project_nr,
+		main_p.project_name,
+		abs(coalesce(main_p.end_date::date - main_p.start_date::date, 0.0)) + 0.0001 as project_duration_days,
+		(select	coalesce(sum(planned_units * uom_factor), 0.0) / 8.0 from (
+			select	t.planned_units,
+				CASE WHEN t.uom_id = 321 THEN 8.0 ELSE 1.0 END as uom_factor
+			from	im_projects sub_p,
+				im_timesheet_tasks t
+			where	sub_p.project_id = t.task_id and
+				sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
+		) t) as estimated_days
+	from	im_projects main_p,
+		im_day_enumerator(:start_date, :end_date) day
+	where	main_p.parent_id is null and
+		main_p.project_status_id in (select * from im_sub_categories([im_project_status_open])) and
+		main_p.start_date <= day.day and
+		main_p.end_date > main_p.start_date
+	) open_tasks
+group by
+      day
+    "
+
+    return "
+[im_ad_hoc_query $workload_sql]
+    "
+
+#    return [join [db_list_of_lists workload $workload_sql] "\n"]
+}
+
+
+ad_proc im_demo_data_create_projects {
+    -day:required
+    {-period_days 21}
+    {-min_work_load_percent 70}
+} {
+    Checks for the average work load in the upcoming days
+    and creates randomly projects to keep the work load
+    at a certain percentage
+} {
+    # -----------------------------------------------------
+    # Check the average work load for the next days
+
+    set workload_sql "
+    	select	main_p.project_id,
+		main_p.project_nr,
+		main_p.project_name,
+		(main_p.end_date::date - main_p.start_date::date) as project_duration_days,
+		(select	coalesce(sum(planned_units * uom_factor), 0.0) / 8.0 from (
+			select	t.planned_units,
+				CASE WHEN t.uom_id = 321 THEN 8.0 ELSE 1.0 END as uom_factor
+			from	im_projects sub_p,
+				im_timesheet_tasks t
+			where	sub_p.project_id = t.task_id and
+				sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
+		) t) as estimated_days
+	from	im_projects main_p
+	where	main_p.parent_id is null and
+		main_p.project_status_id in (select * from im_sub_categories([im_project_status_open])) and
+		main_p.start_date <= :day and
+		main_p.end_date > main_p.start_date
+    "
+    set project_work_sum 0
+    db_foreach workload $workload_sql {
+	if {"" == $project_duration_days || 0 == $project_duration_days} { continue }
+
+	set project_work [expr 1.0 * $estimated_days / $project_duration_days]
+	set project_work_sum [expr $project_work_sum + $project_work]
+    }
+
+    return "
+project_work_sum=$project_work_sum
+[im_ad_hoc_query $workload_sql]
+    "
+
+#    return [join [db_list_of_lists workload $workload_sql] "\n"]
+}
+
+ad_proc im_demo_data_log_timesheet_hours {
     -day:required
 } {
     Checks demo-data for a single day:
@@ -164,7 +290,7 @@ ad_proc im_demo_log_timesheet_hours {
 
     # -----------------------------------------------------
     # Get the current assignments of the user to projects and tasks
-    set assig_sql "
+    set direct_assig_sql "
     	select	u.user_id,
 		p.project_id,
 		bom.percentage
@@ -176,22 +302,20 @@ ad_proc im_demo_log_timesheet_hours {
 		r.object_id_one = p.project_id and
 		r.object_id_two in (
 			select u.user_id from dual union 
-			select group_id from group_distinct_member_map where user_id = :user_id
+			select group_id from group_element_index gei, membership_rels mr where gei.rel_id = mr.rel_id and gei.element_id = u.user_id
 		) and
 		bom.percentage is not null
     "
-    db_foreach assig $assig_sql {
+    db_foreach direct_assig $direct_assig_sql {
 	set key "$user_id-$project_id"
-	set project_assig_hash($key) $percentage
+	set project_direct_assig_hash($key) $percentage
 
-	set assig_sum 0
-	if {[info exists assig_hash($user_id)]} { set assig_sum $assig_hash($user_id) }
-	set assig_sum [expr $assig_sum + $percentage]
-	set assig_hash($user_id) $assig_sum
+	set direct_assig_sum 0
+	if {[info exists direct_assig_hash($user_id)]} { set direct_assig_sum $direct_assig_hash($user_id) }
+	set direct_assig_sum [expr $direct_assig_sum + $percentage]
+	set direct_assig_hash($user_id) $direct_assig_sum
     }
 
-    ad_return_complaint 1 "<pre>emp: [array get employee_hash]\nts: [array get ts_hash]\nassig: [array get assig_hash]\n</pre>"
-
-
+    ad_return_complaint 1 "<pre>emp: [array get employee_hash]\nts: [array get ts_hash]\ndirect_assig: [array get direct_assig_hash]\n</pre>"
 
 }

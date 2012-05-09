@@ -30,8 +30,9 @@ set context [list [list "/intranet-dynfield/" "DynField"] [list "object-types" "
 # ******************************************************
 
 foreach d $day {
-    im_demo_create_beaches -day $d
-    im_demo_log_timesheet_hours -day $d
+    im_demo_data_create_beaches -day $d
+    im_demo_data_create_projects -day $d
+    im_demo_data_log_timesheet_hours -day $d
 }
 
 ad_returnredirect $return_url
