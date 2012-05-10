@@ -191,8 +191,8 @@ from	(
 		main_p.start_date <= day.day and
 		main_p.end_date > main_p.start_date
 	) open_tasks
-group by
-      day
+group by day
+order by day
     "
 
     return "
@@ -204,50 +204,96 @@ group by
 
 
 ad_proc im_demo_data_create_projects {
-    -day:required
-    {-period_days 21}
-    {-min_work_load_percent 70}
+    -template_project_id:required
+    {-new_start_date ""}
+    {-company_id "" }
+    {-project_name "" }
+    {-project_nr "" }
 } {
     Checks for the average work load in the upcoming days
     and creates randomly projects to keep the work load
     at a certain percentage
 } {
     # -----------------------------------------------------
-    # Check the average work load for the next days
+    # Select a random active customer
+    if {"" == $company_id} {
+	set customer_list [db_list customer_list "
+		select	c.company_id
+		from	im_companies c
+		where	c.company_status_id = [im_company_status_active] and
+			c.company_type_id in (select * from im_sub_categories([im_company_type_customer]))
+	"]
+	set company_id [util::random_list_element $customer_list]
+    }
+    
+    if {"" == $project_name} {
+	set template_project_name [db_string template_name "select project_name from im_projects where project_id = :template_project_id" -default ""]
+	if {"" == $template_project_name} { ad_return_complaint 1 "im_demo_data_create_projects: invalid template #$template_project_id" }
+	if {[regexp {^(.*)Template(.*)$} $template_project_name match tail end]} {
+	    set template_project_name [string trim [concat [string trim $tail] " " [string trim $end]]]
+	}
+	set customer_name [db_string customer_name "select company_name from im_companies where company_id = :company_id" -default ""]
+	if {"" == $customer_name} { ad_return_complaint 1 "im_demo_data_create_projects: invalid customer #$company_id" }
 
-    set workload_sql "
-    	select	main_p.project_id,
-		main_p.project_nr,
-		main_p.project_name,
-		(main_p.end_date::date - main_p.start_date::date) as project_duration_days,
-		(select	coalesce(sum(planned_units * uom_factor), 0.0) / 8.0 from (
-			select	t.planned_units,
-				CASE WHEN t.uom_id = 321 THEN 8.0 ELSE 1.0 END as uom_factor
-			from	im_projects sub_p,
-				im_timesheet_tasks t
-			where	sub_p.project_id = t.task_id and
-				sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
-		) t) as estimated_days
-	from	im_projects main_p
-	where	main_p.parent_id is null and
-		main_p.project_status_id in (select * from im_sub_categories([im_project_status_open])) and
-		main_p.start_date <= :day and
-		main_p.end_date > main_p.start_date
-    "
-    set project_work_sum 0
-    db_foreach workload $workload_sql {
-	if {"" == $project_duration_days || 0 == $project_duration_days} { continue }
-
-	set project_work [expr 1.0 * $estimated_days / $project_duration_days]
-	set project_work_sum [expr $project_work_sum + $project_work]
+	set project_name [concat $customer_name $template_project_name]
     }
 
-    return "
-project_work_sum=$project_work_sum
-[im_ad_hoc_query $workload_sql]
+    if {"" == $project_nr} {
+        set project_nr [im_next_project_nr]
+    }
+
+    if {"" == $new_start_date} {
+       set new_start_date_list [db_list new_start_date_list "select day from im_day_enumerator(now()::date - 30, now()::date + 180) day"]
+       set new_start_date [util::random_list_element $new_start_date_list]
+    }
+
+    set parent_project_id ""
+    set clone_postfix "Clone"
+
+#    ad_return_complaint 1 "company_id=$company_id, project_name=$project_name"
+
+    set cloned_project_id [im_project_clone \
+                   -clone_costs_p 0 \
+                   -clone_files_p 0 \
+                   -clone_subprojects_p 1 \
+                   -clone_forum_topics_p 1 \
+                   -clone_members_p 1 \
+                   -clone_timesheet_tasks_p 1 \
+                   -clone_target_languages_p 0 \
+                   -company_id $company_id \
+                   $template_project_id \
+                   $project_name \
+                   $project_nr \
+                   $clone_postfix \
+    ]
+
+    # Update the main project's name and nr
+    db_dml update_cloned_project "
+	update im_projects set
+		project_name = :project_name,
+		project_nr = :project_nr,
+		project_path = :project_nr
+	where project_id = :cloned_project_id      
     "
 
-#    return [join [db_list_of_lists workload $workload_sql] "\n"]
+
+    # Update the start- and end_date of the project structure
+    set move_days [db_string move_days "select :new_start_date::date - p.start_date::date from im_projects p where project_id = :cloned_project_id"]
+    db_dml move_cloned_project "
+	    update im_projects set
+		start_date = start_date + :move_days * '1 day'::interval,
+		end_date = end_date + :move_days * '1 day'::interval
+	    where
+		project_id in (
+			select	sub_p.project_id
+			from	im_projects sub_p,
+				im_projects main_p
+			where	main_p.project_id = :cloned_project_id and
+				sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
+		)
+    "  
+
+    return $cloned_project_id
 }
 
 ad_proc im_demo_data_log_timesheet_hours {
