@@ -238,7 +238,7 @@ ad_proc im_demo_data_create_project {
 	"]
 	set template_id [util::random_list_element $template_list]
     }
-    
+
     if {"" == $project_name} {
 	set template_project_name [db_string template_name "select project_name from im_projects where project_id = :template_id" -default ""]
 	if {"" == $template_project_name} { ad_return_complaint 1 "im_demo_data_create_projects: invalid template #$template_id" }
@@ -262,8 +262,6 @@ ad_proc im_demo_data_create_project {
 
     set parent_project_id ""
     set clone_postfix "Clone"
-
-#    ad_return_complaint 1 "company_id=$company_id, project_name=$project_name"
 
     set cloned_project_id [im_project_clone \
                    -clone_costs_p 0 \
@@ -289,7 +287,6 @@ ad_proc im_demo_data_create_project {
 		template_p = 'f'
 	where project_id = :cloned_project_id      
     "
-
 
     # Update the start- and end_date of the project structure
     set move_days [db_string move_days "select :new_start_date::date - p.start_date::date from im_projects p where project_id = :cloned_project_id"]
@@ -417,7 +414,7 @@ ad_proc im_demo_data_log_timesheet_hours {
     # Get the list of employees together with their availability
     set employee_sql "
     	select	  e.employee_id,
-		  e.availability
+		  coalesce(e.availability, 100.0) as availability
 	from	  im_employees e,
 		  cc_users u
 	where	  u.user_id = e.employee_id and
@@ -434,8 +431,7 @@ ad_proc im_demo_data_log_timesheet_hours {
 		sum(h.hours) as hours
 	from	im_hours h
 	where	h.day = :day
-	group by
-		h.user_id
+	group by h.user_id
     "
     db_foreach ts_hours $ts_sql {
     	set ts_hash($user_id) $hours
@@ -568,37 +564,35 @@ ad_proc im_demo_data_log_timesheet_hours {
     }
 
 
+    # Fake the creation_date of cost objects and audit information
+    # Therefore store the information about the last objects
+    set prev_cost_id [db_string prev_cost_id "select max(cost_id) from im_costs"]
+    set prev_audit_id [db_string prev_audit "select last_value from im_audit_seq"]
+
     # Update cache information of projects and audit
     foreach pid [array names modified_projects_hash] {
     
-	# Re-calculate the cost cache
-	im_cost_update_project_cost_cache $pid
-	
 	# Update the cost caches
 	im_timesheet_update_timesheet_cache -project_id $pid
 
 	# Calculate the %completed of the project
 	im_timesheet_project_advance $pid
 
+	# Re-calculate the cost cache
+	im_cost_update_project_cost_cache $pid
+	
 	# Write an audit record
 	# im_audit -object_id $tid -user_id $admin_user_id -action "after_update" -comment "im_demo_data_log_timesheet_hours: Simulating hour logging"
     }
 
+    # Patch costs objects
+    db_dml patch_costs "update im_costs set effective_date = :day where cost_id > :prev_cost_id"
+    db_dml patch_cost_objects "update acs_objects set creation_date = :day where object_type = 'im_cost' and object_id > :prev_cost_id"
+
     # Move all audit records back to the specified day
     set end_audit_tz [db_string end_audit_tz "select now() from dual" -default 0]
-
-    db_dml shift_audits "
-	update im_audits
-	set audit_date = :day
-	where audit_date between :start_audit_tz and :end_audit_tz
-    "
-
-    db_dml shift_project_audits "
-	update im_projects_audit
-	set last_modified = :day
-	where last_modified between :start_audit_tz and :end_audit_tz
-    "
-    
+    db_dml shift_audits "update im_audits set audit_date = :day where audit_date between :start_audit_tz and :end_audit_tz"
+    db_dml shift_project_audits "update im_projects_audit set last_modified = :day where last_modified between :start_audit_tz and :end_audit_tz"
 
     ad_return_complaint 1 "<pre>emp: [array get employee_hash]\nts: [array get ts_hash]\ndirect_assig: [array get direct_assig_hash]\ntasks: [array get open_tasks_hash]</pre>"
 
