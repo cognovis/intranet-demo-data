@@ -9,9 +9,147 @@ ad_library {
 }
 
 
+ad_proc im_demo_data_main_loop {
+    {-start_date ""}
+    {-end_date ""}
+    {-max_days ""}
+} {
+    Run the company simulation for a number of days
+} {
+    if {"" == $start_date} {  set start_date [db_string start_date "select coalesce(max(day)::date + 1, now()::date - 365) from im_hours" -default ""] }
+    if {"" == $end_date} { set end_date [db_string end_date "select now()::date from dual"] }
+    if {"" != $max_days} { set end_date [db_string max_days "select :start_date::date + :max_days from dual"] }
+
+    set days_list [db_list days_list "select day.day from im_day_enumerator(:start_date, :end_date) day"]
+    foreach day $day_list {
+
+        # ToDo: Get the company load of the next 100 days and
+	# compare with the company capacity (number of employees x availability)
+	set company_load [im_demo_data_timesheet_company_load -start_date $day]
+	set capacity_perc [im_demo_data_timesheet_company_capacity_percentage]
+
+	ad_return_complaint 1 "im_demo_data_main_loop: day=$day, company_load=$company_load, capacity_perc=$capacity_perc"
+
+        # Create new projects if not enough work load
+	im_demo_data_project_new_from_template -day $day
+
+	# Advance potential projects in sales pipeline
+	im_demo_data_project_sales_pipeline_advance -day $day
+
+	# Staff the project if it is in status "open" but has unassigned skill profiles
+	set projects_to_staff [db_list projects_to_staff "
+		select	p.project_id
+		from	im_projects p
+		where	p.parent_id is null and
+			(p.project_lead_id is null or p.project_lead_id = 624)
+	"]
+	foreach project_id $projects_to_staff {
+	    im_demo_data_project_staff -project_id $project_id
+	}
+
+	# Log hours for all employees
+	im_demo_data_timesheet_log_employee_hours -day $day
+
+	# ToDo: Write invoices for "Delivered" projects
+
+    }
+}
+
+
+ad_proc im_demo_data_project_sales_pipeline_advance {
+    {-day ""}
+} {
+    Check for "potential" main projects including sub-type of potential.
+    Advance these projects to the next sales pipeline state according to
+    some transition probability function
+} {
+    if {"" == $day} { set day [db_string today "select now()::date from dual"] }
+
+    set potential_projects_sql "
+	select	project_id,
+		project_status_id
+	from	im_projects p
+	where	p.parent_id is null and
+		p.project_status_id in (select * from im_sub_categories([im_project_status_potential]))
+    "
+    db_foreach pot $potential_projects_sql {
+    	set project_status_hash($project_id) $project_status_id
+    }
+
+    # Loop through all projects
+    foreach pid [array names project_status_hash] {
+    	set sid $project_status_hash($pid)
+	
+	# Loop through the audit logs of the project starting with the most
+	# recent date and check for the first ocurrence of a project status
+	# different from the current one. 
+	set status_days_sql "
+		select	audit_date::date as audit_date,
+			:day::date - audit_date::date as audit_days,
+			substring(audit_value from 'project_status_id\\t(\[^\\n\]*)')::integer as project_status_id
+		from	im_audits
+		where	audit_object_id = :project_id
+		order by audit_date DESC
+	"
+	set status_date ""
+	set status_days ""
+	db_foreach status_days $status_days_sql {
+	    if {"" != $status_date} { continue }
+	    if {$project_status_id != $sid} { 
+	       set status_date $audit_date 
+	       set status_days $audit_days
+	    }
+	}
+	if {"" == $status_days} { set status_days 0 }
+	set project_status_days_hash($pid) $status_days
+    }
+
+    # We now have a list of projects together with the days since
+    # when they have the current status.
+    # Loop through the project and advance their status if appropriate.
+    #
+    foreach pid [array names project_status_days_hash] {
+    	set project_status_id $project_status_hash($pid)
+        set status_days $project_status_days_hash($pid)
+
+	# Default potential project states.
+	# There may be added states with higher IDs which we'll ignore
+	#        71 | Potential
+	#        72 | Inquiring
+	#        73 | Qualifying
+	#        74 | Quoting
+	#        75 | Quote Out
+	#        76 | Open
+	ns_log Notice "im_demo_data_project_sales_pipeline_advance: status=$project_status_id, days=$status_days"
+	switch $project_status_id {
+	    72 - 73 - 74 - 75 {
+	        # Advance the project to the next state after a few days.
+		# The probabiligy for a status change rises with the number of days.
+		# 100 days is 100% probability.
+		set prob_perc [expr ($status_days - 1)]
+		if {$prob_perc > 100.0} { set prob_perc 100.0 }
+		if {$prob_perc < 0.0} { set prob_perc 0.0 }
+		set rand_perc [expr rand() * 100.0]
+		ns_log Notice "im_demo_data_project_sales_pipeline_advance: status=$project_status_id, days=$status_days, prob_perc=$prob_perc"
+		if {$rand_perc < $prob_perc} {
+		    # Change the status to the next status.
+		    # Take advantage of the linear numbering and that 76=Open is the status after 75.
+		    ns_log Notice "im_demo_data_project_sales_pipeline_advance: advanding project=$pid to status [expr $project_status_id + 1]"
+		    db_dml status_other "update im_projects set project_status_id = :project_status_id + 1 where project_id = :pid"
+		}
+	    }
+	    default {
+	        # Either 71 or some other user-defined status.
+		# Set the status immediately to 72.
+		db_dml status_other "update im_projects set project_status_id = 72 where project_id = :pid"
+	    }
+	}
+    }
+}
 
 
 ad_proc im_demo_data_project_new_from_template {
+    {-day ""}
     {-debug_p 0}
     {-company_id ""}
     {-template ""}
@@ -19,6 +157,8 @@ ad_proc im_demo_data_project_new_from_template {
 } {
     Creates a new project from a template of the intranet-demo-data folder.
 } {
+    if {"" == $day} { set day [db_string today "select now()::date from dual"] }
+
     # Determine the template path
     set page_root [ns_info pageroot]
     set server_root [join [lrange [split $page_root "/"] 0 end-1] "/"]
@@ -36,7 +176,7 @@ ad_proc im_demo_data_project_new_from_template {
 
     # When shold the new project start?
     if {"" == $new_start_date} {
-       set new_start_date_list [db_list new_start_date_list "select day from im_day_enumerator(now()::date - 30, now()::date + 180) day"]
+       set new_start_date_list [db_list new_start_date_list "select day from im_day_enumerator(:day::date + 30, :day::date + 270) day"]
        set new_start_date [util::random_list_element $new_start_date_list]
     }
 
@@ -87,6 +227,9 @@ ad_proc im_demo_data_project_new_from_template {
 	-project_id $project_id \
 	-file_content $binary_content
 
+
+    # Update the status of the new project to "potential"
+    db_dml status_potential "update im_projects set project_status_id = [im_project_status_potential] where project_id = :project_id"
 
     # Update the start- and end_date of the project structure
     set move_days [db_string move_days "select :new_start_date::date - p.start_date::date from im_projects p where project_id = :project_id"]
@@ -226,10 +369,20 @@ ad_proc im_demo_data_project_staff {
     db_1row main_project_info "
 	select	start_date as main_project_start_date,
 		end_date as main_project_end_date,
-		end_date::date - start_date::date as main_project_duration
+		end_date::date - start_date::date as main_project_duration,
+		project_leand_id
 	from	im_projects
 	where	project_id = :project_id
     "
+
+    # Assign a project manager
+    if {"" == $project_lead_id} {
+	set pms [im_profile::user_options -profile_ids [im_profile_project_managers]]
+	set pm [util::random_list_element $pms]
+	set pm_id [lindex $pm 1]
+	ad_return_complaint 1 "pm=$pm, pm_id=$pm_id"
+	db_dml update_pm "update im_projects set project_lead_id = :pm_id where project_id = :project_id"
+    }
 
     # -----------------------------------------------------
     # Get the list of employees together with their availability and
@@ -273,7 +426,6 @@ ad_proc im_demo_data_project_staff {
     set candidate_list [db_list cand_list "select employee_id from ($employee_sql) e"]
     set len [llength $candidate_list]
     set candidate_list [lrange $candidate_list 0 [expr round($len / 2.0)]]
-
 
 
     # -----------------------------------------------------

@@ -75,6 +75,19 @@ update persons set first_names = 'Presales', last_name = 'Presales' where person
 update users set username = 'presales' where user_id = 9003;
 update parties set email = 'presales@tigerpond.com' where party_id = 9003;
 
+update persons set first_names = 'Tester', last_name = 'Tester' where person_id = 9005;
+update users set username = 'tester' where user_id = 9005;
+update parties set email = 'tester@tigerpond.com' where party_id = 9005;
+
+update persons set first_names = 'Senior', last_name = 'Developer' where person_id = 9007;
+update users set username = 'sendev' where user_id = 9007;
+update parties set email = 'senior.developer@tigerpond.com' where party_id = 9007;
+
+update persons set first_names = 'Junior', last_name = 'Developer' where person_id = 9013;
+update users set username = 'jundev' where user_id = 9013;
+update parties set email = 'junior.developer@tigerpond.com' where party_id = 9013;
+
+
 
 -- Remove users from all previous groups (except for group -2 (registered users))
 update membership_rels set member_state = 'deleted' 
@@ -101,11 +114,11 @@ SELECT membership_rel__new((select group_id from groups where group_name = 'Skil
 SELECT membership_rel__new((select group_id from groups where group_name = 'Skill Profile'), 8997);
 SELECT membership_rel__new((select group_id from groups where group_name = 'Skill Profile'), 8999);
 SELECT membership_rel__new((select group_id from groups where group_name = 'Skill Profile'), 9003);
+SELECT membership_rel__new((select group_id from groups where group_name = 'Skill Profile'), 9005);
+SELECT membership_rel__new((select group_id from groups where group_name = 'Skill Profile'), 9007);
+SELECT membership_rel__new((select group_id from groups where group_name = 'Skill Profile'), 9013);
 
 
---   9005 | Manuel             | Iturriagagoitia
---   9007 | David              | Bertomeu i Castello
---   9013 | Raquel             | Duque
 --   9017 | Valery             | Waters
 --   9021 | Audrey             | Lucas
 --   9025 | Marcela            | Gray
