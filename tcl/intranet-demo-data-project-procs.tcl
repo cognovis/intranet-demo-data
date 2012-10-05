@@ -18,9 +18,9 @@ ad_proc im_demo_data_main_loop {
 } {
     if {"" == $start_date} {  set start_date [db_string start_date "select coalesce(max(day)::date + 1, now()::date - 365) from im_hours" -default ""] }
     if {"" == $end_date} { set end_date [db_string end_date "select now()::date from dual"] }
-    if {"" != $max_days} { set end_date [db_string max_days "select :start_date::date + :max_days from dual"] }
+    if {"" != $max_days} { set end_date [db_string max_days "select :start_date::date + :max_days::integer from dual"] }
 
-    set days_list [db_list days_list "select day.day from im_day_enumerator(:start_date, :end_date) day"]
+    set day_list [db_list days_list "select day.day from im_day_enumerator(:start_date, :end_date) day"]
     foreach day $day_list {
 
         # ToDo: Get the company load of the next 100 days and
@@ -28,10 +28,10 @@ ad_proc im_demo_data_main_loop {
 	set company_load [im_demo_data_timesheet_company_load -start_date $day]
 	set capacity_perc [im_demo_data_timesheet_company_capacity_percentage]
 
-	ad_return_complaint 1 "im_demo_data_main_loop: day=$day, company_load=$company_load, capacity_perc=$capacity_perc"
-
         # Create new projects if not enough work load
-	im_demo_data_project_new_from_template -day $day
+	if {$company_load < $capacity_perc} {
+	    im_demo_data_project_new_from_template -day $day
+	}
 
 	# Advance potential projects in sales pipeline
 	im_demo_data_project_sales_pipeline_advance -day $day
@@ -176,7 +176,7 @@ ad_proc im_demo_data_project_new_from_template {
 
     # When shold the new project start?
     if {"" == $new_start_date} {
-       set new_start_date_list [db_list new_start_date_list "select day from im_day_enumerator(:day::date + 30, :day::date + 270) day"]
+       set new_start_date_list [db_list new_start_date_list "select day from im_day_enumerator(:day::date + 30, :day::date + 480) day"]
        set new_start_date [util::random_list_element $new_start_date_list]
     }
 
@@ -203,6 +203,7 @@ ad_proc im_demo_data_project_new_from_template {
 
     # create a new base project for the contents
     set template_body [lrange [split $template_file "/"] end end]
+    if {[regexp {^(.*)\.[0-9]+[a-z]\.xml} $template_body match t]} { set template_body $t }
     if {[regexp {^(.*)\.[0-9]+\.xml} $template_body match t]} { set template_body $t }
     regsub -all "\\-" $template_body " " template_body
     set customer_name [db_string customer_name "select company_name from im_companies where company_id = :company_id" -default ""]
@@ -211,7 +212,7 @@ ad_proc im_demo_data_project_new_from_template {
     regsub -all "  " $project_name " " project_name
     
     set project_nr [im_next_project_nr]
-    set project_id [project::new \
+    set main_project_id [project::new \
 			-project_name $project_name \
 			-project_nr $project_nr \
 			-project_path $project_nr \
@@ -224,18 +225,18 @@ ad_proc im_demo_data_project_new_from_template {
     im_gp_save_xml \
 	-debug_p $debug_p \
 	-return_url [im_url_with_query] \
-	-project_id $project_id \
+	-project_id $main_project_id \
 	-file_content $binary_content
 
 
     # Update the status of the new project to "potential"
-    db_dml status_potential "update im_projects set project_status_id = [im_project_status_potential] where project_id = :project_id"
+    db_dml status_potential "update im_projects set project_status_id = [im_project_status_potential] where project_id = :main_project_id"
 
     # Update the start- and end_date of the project structure
-    set move_days [db_string move_days "select :new_start_date::date - p.start_date::date from im_projects p where project_id = :project_id"]
+    set move_days [db_string move_days "select :new_start_date::date - start_date::date from im_projects where project_id = :main_project_id"]
     db_dml move_cloned_project "
 	    update im_projects set
-	    	project_status_id = [im_project_status_open],
+	    	project_status_id = [im_project_status_potential],
 		start_date = start_date + :move_days * '1 day'::interval,
 		end_date = end_date + :move_days * '1 day'::interval
 	    where
@@ -243,13 +244,13 @@ ad_proc im_demo_data_project_new_from_template {
 			select	sub_p.project_id
 			from	im_projects sub_p,
 				im_projects main_p
-			where	main_p.project_id = :cloned_project_id and
+			where	main_p.project_id = :main_project_id and
 				sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
 		)
     "  
 
 
-    return $project_id
+    return $main_project_id
 
 }
 
@@ -370,7 +371,7 @@ ad_proc im_demo_data_project_staff {
 	select	start_date as main_project_start_date,
 		end_date as main_project_end_date,
 		end_date::date - start_date::date as main_project_duration,
-		project_leand_id
+		project_lead_id
 	from	im_projects
 	where	project_id = :project_id
     "
@@ -380,7 +381,6 @@ ad_proc im_demo_data_project_staff {
 	set pms [im_profile::user_options -profile_ids [im_profile_project_managers]]
 	set pm [util::random_list_element $pms]
 	set pm_id [lindex $pm 1]
-	ad_return_complaint 1 "pm=$pm, pm_id=$pm_id"
 	db_dml update_pm "update im_projects set project_lead_id = :pm_id where project_id = :project_id"
     }
 

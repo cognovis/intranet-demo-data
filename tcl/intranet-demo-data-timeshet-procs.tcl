@@ -55,7 +55,7 @@ ad_proc im_demo_data_timesheet_company_load {
     # Check the average work load for the next days
 
     set workload_sql "
-	select	sum(estimated_days) as project_work
+	select	coalesce(sum(estimated_days), 0.0) as project_work
 	from	(select	main_p.project_id,
 			main_p.project_nr,
 			main_p.project_name,
@@ -316,6 +316,6 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
     db_dml shift_audits "update im_audits set audit_date = :day where audit_date between :start_audit_tz and :end_audit_tz"
     db_dml shift_project_audits "update im_projects_audit set last_modified = :day where last_modified between :start_audit_tz and :end_audit_tz"
 
-    ad_return_complaint 1 "<pre>emp: [array get employee_hash]\nts: [array get ts_hash]\ndirect_assig: [array get direct_assig_hash]\ntasks: [array get open_tasks_hash]</pre>"
+    # ad_return_complaint 1 "<pre>emp: [array get employee_hash]\nts: [array get ts_hash]\ndirect_assig: [array get direct_assig_hash]\ntasks: [array get open_tasks_hash]</pre>"
 
 }
