@@ -43,17 +43,23 @@ ad_proc im_demo_data_timesheet_work_hours_helper {
 ad_proc im_demo_data_timesheet_company_load {
     { -start_date ""}
     { -end_date ""}
+    { -project_status_id "" }
 } {
     Calculates the average work load for the entire company in the 
     specified date interval. These values are used later to calculate
     where to place new projects.
+    By default 
 } {
     if {"" == $start_date} { set start_date [db_string start_date "select now()::date from dual"] }
     if {"" == $end_date} { set end_date [db_string end_date "select now()::date + 100 from dual"] }
 
     # -----------------------------------------------------
     # Check the average work load for the next days
-
+    if {0 != $project_status_id && "" != $project_status_id} { 
+	set status_where "main_p.project_status_id in (select * from im_sub_categories(:project_status_id)) and" 
+    } else { 
+	set status_where "" 
+    }
     set workload_sql "
 	select	coalesce(sum(estimated_days), 0.0) as project_work
 	from	(select	main_p.project_id,
@@ -61,7 +67,7 @@ ad_proc im_demo_data_timesheet_company_load {
 			main_p.project_name,
 			(select	coalesce(sum(t.planned_units * t.uom_factor * (100.0 - t.percent_completed)), 0.0) / 8.0 from (
 				select	t.planned_units,
-					sub_p.percent_completed,
+					coalesce(sub_p.percent_completed, 0.0) as percent_completed,
 					CASE WHEN t.uom_id = 321 THEN 8.0 ELSE 1.0 END as uom_factor
 				from	im_projects sub_p,
 					im_timesheet_tasks t
@@ -70,7 +76,8 @@ ad_proc im_demo_data_timesheet_company_load {
 			) t) as estimated_days
 		from	im_projects main_p
 		where	main_p.parent_id is null and
-			main_p.project_status_id in (select * from im_sub_categories(76)) and
+			main_p.project_status_id not in (select * from im_sub_categories([im_project_status_closed])) and
+			$status_where
 			main_p.end_date > :start_date
 		) open_tasks
     "
@@ -108,21 +115,11 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
     # after the last hours logged
     if {"" == $day} {
 	set day [db_string default_day "select max(day)::date + 1 from im_hours" -default ""]
-	if {"" == $day} { set day [db_string now "'select now()::date - 365 from dual"] }
+	if {"" == $day} { set day [db_string now "select now()::date - 365 from dual"] }
     }
-
-    # Fake the creation_date of cost objects and audit information
-    # Therefore store the information about the last objects
-    set prev_object_id [db_string prev_object_id "select max(cost_id) from im_costs"]
-    set prev_audit_id [db_string prev_audit "select last_value from im_audit_seq"]
-
 
     # Default user for logging data
     set admin_user_id [db_string admin_user "select min(user_id) from users where user_id > 0" -default 0]
-
-    # Get the current im_audits.audit_id, so that we can 
-    # move all new audit records to the specified day
-    set start_audit_tz [db_string org_audit_tz "select now() from dual" -default 0]
 
     # -----------------------------------------------------
     # Get the list of employees together with their availability
@@ -184,19 +181,44 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 
 
     # -----------------------------------------------------
+    # Check the case that here are no open projects
+    # and open one random project if available
+    set open_projects [db_list open_projects "
+		select p.project_id from im_projects p
+		where p.parent_id is null and p.project_status_id in (select * from im_sub_categories([im_project_status_open]))
+    "]
+    if {0 == [llength $open_projects]} {
+	set potential_projects [db_list potential_projects "
+		select p.project_id from im_projects p
+		where p.parent_id is null and p.project_status_id in (select * from im_sub_categories([im_project_status_potential]))
+	"]
+	set potential_project_id [util::random_list_element $potential_projects]
+	db_dml open_potential_project "update im_projects set project_status_id = [im_project_status_open] where project_id = :potential_project_id"
+	im_audit -object_id $potential_project_id -comment "log hours: set one potential project to 'open' in order to facilitate timesheet entry"
+    }
+
+    # -----------------------------------------------------
     # All available tasks to work on
     set open_tasks_sql "
 	select	t.task_id,
 		coalesce(p.percent_completed, 0) as percent_completed
 	from	im_projects p,
+		im_projects main_p,
 		im_timesheet_tasks t
 	where	p.project_id = t.task_id and
 		coalesce(p.percent_completed, 0) < 100.0 and
 		p.project_status_id in (select * from im_sub_categories([im_project_status_open])) and
-		p.end_date >= :day
+		main_p.tree_sortkey = tree_root_key(p.tree_sortkey) and
+		main_p.project_status_id in (select * from im_sub_categories([im_project_status_open]))
     "
     db_foreach open_tasks $open_tasks_sql {
 	set open_tasks_hash($task_id) $percent_completed
+    }
+
+    # Check if the array was empty
+    if {0 == [llength [array get open_tasks_hash]]} {
+	# Wait for the next iteration of the main loop...
+	ad_return_complaint 1 "im_demo_data_timesheet_log_employee_hours: No open tasks found"
     }
 
 
@@ -277,7 +299,7 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 			project_status_id = :new_project_status_id
 		where project_id = :tid
 	    "
-	    im_audit -object_id $tid
+	    im_audit -object_id $tid -comment "log hours: advancing the task completion percentage"
 
 	    # Check the super-project if all of it's sub-projects are closed already
 	    if {$new_project_status_id == [im_project_status_closed]} {
@@ -302,20 +324,10 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 
 	# Re-calculate the cost cache
 	im_cost_update_project_cost_cache $pid
-	
-	# Write an audit record
-	# im_audit -object_id $tid -user_id $admin_user_id -action "after_update" -comment "im_demo_data_log_timesheet_hours: Simulating hour logging"
+
+	# Write one audit log per main project
+	im_audit -object_id $pid -comment "log hours: After advancing project completion"
+
     }
-
-    # Patch costs objects
-    db_dml patch_costs "update im_costs set effective_date = :day where cost_id > :prev_object_id"
-    db_dml patch_objects "update acs_objects set creation_date = :day where object_id > :prev_object_id"
-
-    # Move all audit records back to the specified day
-    set end_audit_tz [db_string end_audit_tz "select now() from dual" -default 0]
-    db_dml shift_audits "update im_audits set audit_date = :day where audit_date between :start_audit_tz and :end_audit_tz"
-    db_dml shift_project_audits "update im_projects_audit set last_modified = :day where last_modified between :start_audit_tz and :end_audit_tz"
-
-    # ad_return_complaint 1 "<pre>emp: [array get employee_hash]\nts: [array get ts_hash]\ndirect_assig: [array get direct_assig_hash]\ntasks: [array get open_tasks_hash]</pre>"
 
 }

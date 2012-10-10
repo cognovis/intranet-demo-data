@@ -11,25 +11,30 @@ ad_library {
 
 ad_proc im_demo_data_main_loop {
     {-start_date ""}
-    {-end_date ""}
-    {-max_days ""}
+    {-max_days "1"}
 } {
     Run the company simulation for a number of days
 } {
     if {"" == $start_date} {  set start_date [db_string start_date "select coalesce(max(day)::date + 1, now()::date - 365) from im_hours" -default ""] }
-    if {"" == $end_date} { set end_date [db_string end_date "select now()::date from dual"] }
     if {"" != $max_days} { set end_date [db_string max_days "select :start_date::date + :max_days::integer from dual"] }
 
     set day_list [db_list days_list "select day.day from im_day_enumerator(:start_date, :end_date) day"]
     foreach day $day_list {
 
+	# Fake the creation_date of cost objects and audit information
+	# Therefore store the information about the last objects
+	set prev_object_id [db_string prev_object_id "select max(cost_id) from im_costs"]
+	set prev_audit_id [db_string prev_audit "select last_value from im_audit_seq"]
+
         # ToDo: Get the company load of the next 100 days and
 	# compare with the company capacity (number of employees x availability)
 	set company_load [im_demo_data_timesheet_company_load -start_date $day]
 	set capacity_perc [im_demo_data_timesheet_company_capacity_percentage]
+	set target_company_load [expr $capacity_perc * 500]
 
         # Create new projects if not enough work load
-	if {$company_load < $capacity_perc} {
+	ns_log Notice "im_demo_data_main_loop: company_load=$company_load < target_company_load=$target_company_load"
+	if {$company_load < $target_company_load} {
 	    im_demo_data_project_new_from_template -day $day
 	}
 
@@ -52,6 +57,14 @@ ad_proc im_demo_data_main_loop {
 
 	# ToDo: Write invoices for "Delivered" projects
 
+	# Patch costs objects
+	db_dml patch_costs "update im_costs set effective_date = :day where cost_id > :prev_object_id"
+	db_dml patch_objects "update acs_objects set creation_date = :day where object_id > :prev_object_id"
+	
+	# Move all audit records back to the specified day
+	set end_audit_tz [db_string end_audit_tz "select now() from dual" -default 0]
+	db_dml shift_audits "update im_audits set audit_date = :day where audit_id > :prev_audit_id"
+	db_dml shift_project_audits "update im_projects_audit set last_modified = :day where audit_id > :prev_audit_id"
     }
 }
 
@@ -63,7 +76,10 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
     Advance these projects to the next sales pipeline state according to
     some transition probability function
 } {
-    if {"" == $day} { set day [db_string today "select now()::date from dual"] }
+    if {"" == $day} {
+        set day [db_string default_day "select max(day)::date + 1 from im_hours" -default ""]
+        if {"" == $day} { set day [db_string now "select now()::date - 365 from dual"] }
+    }
 
     set potential_projects_sql "
 	select	project_id,
@@ -76,41 +92,12 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
     	set project_status_hash($project_id) $project_status_id
     }
 
-    # Loop through all projects
-    foreach pid [array names project_status_hash] {
-    	set sid $project_status_hash($pid)
-	
-	# Loop through the audit logs of the project starting with the most
-	# recent date and check for the first ocurrence of a project status
-	# different from the current one. 
-	set status_days_sql "
-		select	audit_date::date as audit_date,
-			:day::date - audit_date::date as audit_days,
-			substring(audit_value from 'project_status_id\\t(\[^\\n\]*)')::integer as project_status_id
-		from	im_audits
-		where	audit_object_id = :project_id
-		order by audit_date DESC
-	"
-	set status_date ""
-	set status_days ""
-	db_foreach status_days $status_days_sql {
-	    if {"" != $status_date} { continue }
-	    if {$project_status_id != $sid} { 
-	       set status_date $audit_date 
-	       set status_days $audit_days
-	    }
-	}
-	if {"" == $status_days} { set status_days 0 }
-	set project_status_days_hash($pid) $status_days
-    }
-
     # We now have a list of projects together with the days since
     # when they have the current status.
     # Loop through the project and advance their status if appropriate.
     #
-    foreach pid [array names project_status_days_hash] {
+    foreach pid [array names project_status_hash] {
     	set project_status_id $project_status_hash($pid)
-        set status_days $project_status_days_hash($pid)
 
 	# Default potential project states.
 	# There may be added states with higher IDs which we'll ignore
@@ -120,32 +107,46 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
 	#        74 | Quoting
 	#        75 | Quote Out
 	#        76 | Open
-	ns_log Notice "im_demo_data_project_sales_pipeline_advance: status=$project_status_id, days=$status_days"
+	ns_log Notice "im_demo_data_project_sales_pipeline_advance: status=$project_status_id"
 	switch $project_status_id {
-	    72 - 73 - 74 - 75 {
-	        # Advance the project to the next state after a few days.
-		# The probabiligy for a status change rises with the number of days.
-		# 100 days is 100% probability.
-		set prob_perc [expr ($status_days - 1)]
-		if {$prob_perc > 100.0} { set prob_perc 100.0 }
-		if {$prob_perc < 0.0} { set prob_perc 0.0 }
+	    71 - 72 - 73 - 74 - 75 {
+	        # Advance the project to the next state with a certain probability.
+		# 4.0% corresponds to 25/2 days for every status change
+		set prob_perc 5.0
 		set rand_perc [expr rand() * 100.0]
-		ns_log Notice "im_demo_data_project_sales_pipeline_advance: status=$project_status_id, days=$status_days, prob_perc=$prob_perc"
+		ns_log Notice "im_demo_data_project_sales_pipeline_advance: advance status: status=$project_status_id, prob_perc=$prob_perc, rand_perc=$rand_perc"
 		if {$rand_perc < $prob_perc} {
 		    # Change the status to the next status.
 		    # Take advantage of the linear numbering and that 76=Open is the status after 75.
-		    ns_log Notice "im_demo_data_project_sales_pipeline_advance: advanding project=$pid to status [expr $project_status_id + 1]"
-		    db_dml status_other "update im_projects set project_status_id = :project_status_id + 1 where project_id = :pid"
+		    ns_log Notice "im_demo_data_project_sales_pipeline_advance: advacding project=$pid to status [expr $project_status_id + 1]"
+		    db_dml status_other "update im_projects set project_status_id = (:project_status_id + 1) where project_id = :pid"
+		    im_audit -object_id $pid -comment "sales pipeline advance: Advancing project"
 		}
 	    }
 	    default {
 	        # Either 71 or some other user-defined status.
 		# Set the status immediately to 72.
+		ns_log Notice "im_demo_data_project_sales_pipeline_advance: updating project #$pid from status '$project_status_id' to status 'inquiring'"
 		db_dml status_other "update im_projects set project_status_id = 72 where project_id = :pid"
+		im_audit -object_id $pid -comment "sales pipeline advance: Found an unknown project status, setting to 72"
+
 	    }
 	}
+
+	# Include the possibility that the project will be canceled.
+	# 1.0% corresponds to 100/2 days in average to cancel a project
+	set prob_perc 0.5
+	set rand_perc [expr rand() * 100.0]
+	ns_log Notice "im_demo_data_project_sales_pipeline_advance: cancel project: status=$project_status_id, prob_perc=$prob_perc, rand_perc=$rand_perc"
+	if {$rand_perc < $prob_perc} {
+	    # Cancel the project
+	    ns_log Notice "im_demo_data_project_sales_pipeline_advance: advacding project=$pid to status 83"
+	    db_dml status_other "update im_projects set project_status_id = [im_project_status_canceled] where project_id = :pid"
+	    im_audit -object_id $pid -comment "sales pipeline advance: Canceling project"
+	}	
     }
 }
+
 
 
 ad_proc im_demo_data_project_new_from_template {
@@ -158,6 +159,9 @@ ad_proc im_demo_data_project_new_from_template {
     Creates a new project from a template of the intranet-demo-data folder.
 } {
     if {"" == $day} { set day [db_string today "select now()::date from dual"] }
+
+    # Remember the current audit_id in order to delete audits later
+    set prev_audit_id [db_string prev_audit "select last_value from im_audit_seq"]
 
     # Determine the template path
     set page_root [ns_info pageroot]
@@ -208,7 +212,7 @@ ad_proc im_demo_data_project_new_from_template {
     regsub -all "\\-" $template_body " " template_body
     set customer_name [db_string customer_name "select company_name from im_companies where company_id = :company_id" -default ""]
     if {"" == $customer_name} { ad_return_complaint 1 "im_demo_data_create_projects: invalid customer #$company_id" }
-    set project_name [concat $customer_name $template_body]
+    set project_name [concat $customer_name $template_body "($day)"]
     regsub -all "  " $project_name " " project_name
     
     set project_nr [im_next_project_nr]
@@ -229,14 +233,26 @@ ad_proc im_demo_data_project_new_from_template {
 	-file_content $binary_content
 
 
-    # Update the status of the new project to "potential"
-    db_dml status_potential "update im_projects set project_status_id = [im_project_status_potential] where project_id = :main_project_id"
+    # Delete the audit records written during creation
+    set subprojects [db_list subprojects "
+			select	sub_p.project_id
+			from	im_projects sub_p,
+				im_projects main_p
+			where	main_p.project_id = :main_project_id and
+				sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
+    "]
+    foreach pid $subprojects {
+	# Reset the last audit record at acs_objects
+	db_dml objects "update acs_objects set last_audit_id = null where object_id = :pid"
+	db_dml audit_chain "update im_audits set audit_last_id = null where audit_last_id in (select audit_id from im_audits where audit_object_id = :pid)"
+	db_dml del_audits "delete from im_audits where audit_object_id = :pid"
+    }
 
     # Update the start- and end_date of the project structure
     set move_days [db_string move_days "select :new_start_date::date - start_date::date from im_projects where project_id = :main_project_id"]
     db_dml move_cloned_project "
 	    update im_projects set
-	    	project_status_id = [im_project_status_potential],
+	    	project_status_id = [im_project_status_open],
 		start_date = start_date + :move_days * '1 day'::interval,
 		end_date = end_date + :move_days * '1 day'::interval
 	    where
@@ -249,6 +265,11 @@ ad_proc im_demo_data_project_new_from_template {
 		)
     "  
 
+    # Update the status of the new project to "potential"
+    set status_id [im_project_status_potential]
+    set total_main_projects [db_string total_main_projects "select count(*) from im_projects where parent_id is null"]
+    if {$total_main_projects < 10} { set status_id [util::random_list_element {72 72 73 74 74 75 75 76}] }
+    db_dml status_potential "update im_projects set project_status_id = :status_id where project_id = :main_project_id"
 
     return $main_project_id
 
@@ -338,6 +359,8 @@ ad_proc im_demo_data_project_clone {
 		template_p = 'f'
 	where project_id = :cloned_project_id      
     "
+    im_audit -object_id $cloned_project_id -comment "project clone: Updating the cloned project"
+
 
     # Update the start- and end_date of the project structure
     set move_days [db_string move_days "select :new_start_date::date - p.start_date::date from im_projects p where project_id = :cloned_project_id"]
@@ -382,6 +405,7 @@ ad_proc im_demo_data_project_staff {
 	set pm [util::random_list_element $pms]
 	set pm_id [lindex $pm 1]
 	db_dml update_pm "update im_projects set project_lead_id = :pm_id where project_id = :project_id"
+	im_audit -object_id $project_id -comment "project staffing: Setting the project manager"
     }
 
     # -----------------------------------------------------
@@ -487,13 +511,14 @@ ad_proc im_demo_data_project_close_done_projects {
     
     if {$all_closed_p} {
         ns_log Notice "im_demo_data_project_close_done_projects -project_id $project_id: closing"
-	set parent_id [db_string parent "select parent_id from im_projects where project_id = :project_id"]
+	set parent_id [db_string parent "select parent_id from im_projects where project_id = :project_id" -default "0"]
+	if {0 == $parent_id} { return }
 
 	# Main projects get the status "delivered" (ready for invoicing), while sub-projects get status "closed"
 	if {"" == $parent_id} { set sid [im_project_status_delivered] } else {set sid [im_project_status_closed] }
 
 	db_dml close_project "update im_projects set project_status_id = :sid where project_id = :project_id"
-	im_audit -object_id $project_id -action "after_update" -comment "closing parents for finished tasks"
+	im_audit -object_id $project_id -action "after_update" -comment "close done projects: closing parents for finished tasks"
 
 	if {"" != $parent_id} {
 	     # Recursive call to check super-projects
@@ -527,11 +552,13 @@ ad_proc im_demo_data_project_create_beaches {
     lappend beaches 0
 
     db_dml beach_open "
-    	update im_projects
-	set project_status_id = [im_project_status_open],
-	    project_type_id = [im_project_type_other]
+    	update im_projects set 
+		project_status_id = [im_project_status_open],
+		project_type_id = [im_project_type_other]
 	where project_id in ([join $beaches ","])
     "
+    foreach pid $beaches { im_audit -object_id $pid -comment "create beaches: Setting default status and type for beaches" }
+
 
     db_1row info "
     	select	to_char(now(), 'YYYY') as year
@@ -554,6 +581,7 @@ ad_proc im_demo_data_project_create_beaches {
 		set	project_status_id = [im_project_status_closed]
 		where	project_id = :pid
         "
+	im_audit -object_id $pid -comment "create beaches: Set beach to 'closed'"
     }
 
     # define the list of projects to create
@@ -604,7 +632,8 @@ ad_proc im_demo_data_project_create_beaches {
 			start_date = '${year}-01-01'::date,
 			end_date = '${year}-12-31'::date
 		where project_id = :main_beach_id
-	 "
+	"
+	im_audit -object_id $main_beach_id -comment "create beaches: Set start and end date"
 
 	# Make all employees members of the beach
 	im_biz_object_add_role $beach_group_id $main_beach_id [im_biz_object_role_full_member]
