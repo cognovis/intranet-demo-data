@@ -9,68 +9,10 @@ ad_library {
 }
 
 
-ad_proc im_demo_data_main_loop {
-    {-start_date ""}
-    {-max_days "1"}
-} {
-    Run the company simulation for a number of days
-} {
-    if {"" == $start_date} {  set start_date [db_string start_date "select coalesce(max(day)::date + 1, now()::date - 365) from im_hours" -default ""] }
-    if {"" != $max_days} { set end_date [db_string max_days "select :start_date::date + :max_days::integer from dual"] }
-
-    set day_list [db_list days_list "select day.day from im_day_enumerator(:start_date, :end_date) day"]
-    foreach day $day_list {
-
-	# Fake the creation_date of cost objects and audit information
-	# Therefore store the information about the last objects
-	set prev_object_id [db_string prev_object_id "select max(cost_id) from im_costs"]
-	set prev_audit_id [db_string prev_audit "select last_value from im_audit_seq"]
-
-        # ToDo: Get the company load of the next 100 days and
-	# compare with the company capacity (number of employees x availability)
-	set company_load [im_demo_data_timesheet_company_load -start_date $day]
-	set capacity_perc [im_demo_data_timesheet_company_capacity_percentage]
-	set target_company_load [expr $capacity_perc * 500]
-
-        # Create new projects if not enough work load
-	ns_log Notice "im_demo_data_main_loop: company_load=$company_load < target_company_load=$target_company_load"
-	if {$company_load < $target_company_load} {
-	    im_demo_data_project_new_from_template -day $day
-	}
-
-	# Advance potential projects in sales pipeline
-	im_demo_data_project_sales_pipeline_advance -day $day
-
-	# Staff the project if it is in status "open" but has unassigned skill profiles
-	set projects_to_staff [db_list projects_to_staff "
-		select	p.project_id
-		from	im_projects p
-		where	p.parent_id is null and
-			(p.project_lead_id is null or p.project_lead_id = 624)
-	"]
-	foreach project_id $projects_to_staff {
-	    im_demo_data_project_staff -project_id $project_id
-	}
-
-	# Log hours for all employees
-	im_demo_data_timesheet_log_employee_hours -day $day
-
-	# ToDo: Write invoices for "Delivered" projects
-
-	# Patch costs objects
-	db_dml patch_costs "update im_costs set effective_date = :day where cost_id > :prev_object_id"
-	db_dml patch_objects "update acs_objects set creation_date = :day where object_id > :prev_object_id"
-	
-	# Move all audit records back to the specified day
-	set end_audit_tz [db_string end_audit_tz "select now() from dual" -default 0]
-	db_dml shift_audits "update im_audits set audit_date = :day where audit_id > :prev_audit_id"
-	db_dml shift_project_audits "update im_projects_audit set last_modified = :day where audit_id > :prev_audit_id"
-    }
-}
-
-
 ad_proc im_demo_data_project_sales_pipeline_advance {
     {-day ""}
+    {-advance_probability 10.0}
+    {-cancel_probability 0.5}
 } {
     Check for "potential" main projects including sub-type of potential.
     Advance these projects to the next sales pipeline state according to
@@ -78,7 +20,7 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
 } {
     if {"" == $day} {
         set day [db_string default_day "select max(day)::date + 1 from im_hours" -default ""]
-        if {"" == $day} { set day [db_string now "select now()::date - 365 from dual"] }
+        if {"" == $day} { set day "2010-01-01" }
     }
 
     set potential_projects_sql "
@@ -98,6 +40,7 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
     #
     foreach pid [array names project_status_hash] {
     	set project_status_id $project_status_hash($pid)
+	set project_needs_shift_p 0
 
 	# Default potential project states.
 	# There may be added states with higher IDs which we'll ignore
@@ -112,10 +55,9 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
 	    71 - 72 - 73 - 74 - 75 {
 	        # Advance the project to the next state with a certain probability.
 		# 4.0% corresponds to 25/2 days for every status change
-		set prob_perc 5.0
 		set rand_perc [expr rand() * 100.0]
-		ns_log Notice "im_demo_data_project_sales_pipeline_advance: advance status: status=$project_status_id, prob_perc=$prob_perc, rand_perc=$rand_perc"
-		if {$rand_perc < $prob_perc} {
+		ns_log Notice "im_demo_data_project_sales_pipeline_advance: advance status: status=$project_status_id, advance_probability=$, rand_perc=$rand_perc"
+		if {$rand_perc < $advance_probability} {
 		    # Change the status to the next status.
 		    # Take advantage of the linear numbering and that 76=Open is the status after 75.
 		    ns_log Notice "im_demo_data_project_sales_pipeline_advance: advacding project=$pid to status [expr $project_status_id + 1]"
@@ -135,10 +77,9 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
 
 	# Include the possibility that the project will be canceled.
 	# 1.0% corresponds to 100/2 days in average to cancel a project
-	set prob_perc 0.5
 	set rand_perc [expr rand() * 100.0]
-	ns_log Notice "im_demo_data_project_sales_pipeline_advance: cancel project: status=$project_status_id, prob_perc=$prob_perc, rand_perc=$rand_perc"
-	if {$rand_perc < $prob_perc} {
+	ns_log Notice "im_demo_data_project_sales_pipeline_advance: cancel project: status=$project_status_id, cancel_probability=$cancel_probability, rand_perc=$rand_perc"
+	if {$rand_perc < $cancel_probability} {
 	    # Cancel the project
 	    ns_log Notice "im_demo_data_project_sales_pipeline_advance: advacding project=$pid to status 83"
 	    db_dml status_other "update im_projects set project_status_id = [im_project_status_canceled] where project_id = :pid"
@@ -385,6 +326,7 @@ ad_proc im_demo_data_project_clone {
 
 
 ad_proc im_demo_data_project_staff {
+    -day:required
     -project_id:required
 } {
     Assigns the project tasks to "suitable" employees.
@@ -397,6 +339,24 @@ ad_proc im_demo_data_project_staff {
 		project_lead_id
 	from	im_projects
 	where	project_id = :project_id
+    "
+
+    # Move the project so that it starts in the next days
+    set move_days [db_string move_days "select :day::date - :main_project_start_date::date from dual"]
+    set move_days [expr $move_days + 7 + int(rand() * 30.0)]
+    db_dml move_staffed_project "
+	    update im_projects set
+	    	project_status_id = [im_project_status_open],
+		start_date = start_date + :move_days * '1 day'::interval,
+		end_date = end_date + :move_days * '1 day'::interval
+	    where
+		project_id in (
+			select	sub_p.project_id
+			from	im_projects sub_p,
+				im_projects main_p
+			where	main_p.project_id = :project_id and
+				sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
+		)
     "
 
     # Assign a project manager

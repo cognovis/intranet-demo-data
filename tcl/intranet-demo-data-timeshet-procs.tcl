@@ -162,10 +162,8 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 	where	p.project_id = t.task_id and
 		r.rel_id = bom.rel_id and
 		r.object_id_one = p.project_id and
-		r.object_id_two in (
-			select u.user_id from dual union 
-			select group_id from group_element_index gei, membership_rels mr where gei.rel_id = mr.rel_id and gei.element_id = u.user_id
-		) and
+		r.object_id_two = u.user_id and
+		u.user_id not in (select member_id from group_distinct_member_map where group_id = [im_profile_skill_profile]) and
 		bom.percentage is not null and
 		coalesce(p.percent_completed, 0.0) < 100.0
     "
@@ -199,6 +197,7 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 
     # -----------------------------------------------------
     # All available tasks to work on
+    # in projects that have started before now()
     set open_tasks_sql "
 	select	t.task_id,
 		coalesce(p.percent_completed, 0) as percent_completed
@@ -209,13 +208,36 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 		coalesce(p.percent_completed, 0) < 100.0 and
 		p.project_status_id in (select * from im_sub_categories([im_project_status_open])) and
 		main_p.tree_sortkey = tree_root_key(p.tree_sortkey) and
-		main_p.project_status_id in (select * from im_sub_categories([im_project_status_open]))
+		main_p.project_status_id in (select * from im_sub_categories([im_project_status_open])) and
+		main_p.start_date < :day::date
     "
     db_foreach open_tasks $open_tasks_sql {
 	set open_tasks_hash($task_id) $percent_completed
     }
 
-    # Check if the array was empty
+    # -----------------------------------------------------
+    # If there are no currently open project then we can also work
+    # on future projects.
+    # All available tasks to work on
+    if {[llength [array get open_tasks_hash]] == 0} {
+        set open_tasks_sql "
+		select	t.task_id,
+			coalesce(p.percent_completed, 0) as percent_completed
+		from	im_projects p,
+			im_projects main_p,
+			im_timesheet_tasks t
+		where	p.project_id = t.task_id and
+			coalesce(p.percent_completed, 0) < 100.0 and
+			p.project_status_id in (select * from im_sub_categories([im_project_status_open])) and
+			main_p.tree_sortkey = tree_root_key(p.tree_sortkey) and
+			main_p.project_status_id in (select * from im_sub_categories([im_project_status_open]))
+	"
+	db_foreach open_tasks $open_tasks_sql {
+	    set open_tasks_hash($task_id) $percent_completed
+	}
+    }
+
+    # Check if the array is still empty
     if {0 == [llength [array get open_tasks_hash]]} {
 	# Wait for the next iteration of the main loop...
 	ad_return_complaint 1 "im_demo_data_timesheet_log_employee_hours: No open tasks found"
