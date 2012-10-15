@@ -37,7 +37,7 @@ ad_proc im_demo_data_main_loop {
 	set company_load_potential_or_open [im_demo_data_timesheet_company_load -start_date $day]
 	set company_load_open [im_demo_data_timesheet_company_load -start_date $day -project_status_id [im_project_status_open]]
 	set capacity_perc [im_demo_data_timesheet_company_capacity_percentage]
-	set target_company_load_potential_or_open [expr $capacity_perc * 150]
+	set target_company_load_potential_or_open [expr $capacity_perc * 120]
 	set target_company_load_open [expr $capacity_perc * 30]
 
         # Create new projects if not enough work load
@@ -66,8 +66,8 @@ ad_proc im_demo_data_main_loop {
 	    ns_log Notice "im_demo_data_main_loop: im_demo_data_project_staff -project_id $project_id"
 	    im_demo_data_project_staff -day $day -project_id $project_id
 
-	    ns_log Notice "im_demo_data_main_loop: im_demo_data_project_risk_create -project_id $project_id"
-	    im_demo_data_project_risk_create -day $day -project_id $project_id
+	    ns_log Notice "im_demo_data_main_loop: im_demo_data_risk_create -project_id $project_id"
+	    im_demo_data_risk_create -day $day -project_id $project_id
 
 	}
 
