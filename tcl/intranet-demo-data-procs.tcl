@@ -22,6 +22,14 @@ ad_proc im_demo_data_main_loop {
     set day_list [db_list days_list "select day.day from im_day_enumerator(:start_date, :end_date) day"]
     foreach day $day_list {
 
+	# Set the global parameter for other packages to evaluate to the curent day
+	parameter::set_from_package_key -package_key "intranet-demo-data" -parameter "DemoDataDay" -value $day
+
+	# calculate day as integer
+	set day_julian [im_date_ansi_to_julian $day]
+	# Weekday starts with 0=sunday and ends with 6=saturday
+	set day_of_week [expr ($day_julian + 1) % 7]
+
 	ns_log Notice "im_demo_data_main_loop: "
 	ns_log Notice "im_demo_data_main_loop: "
 	ns_log Notice "im_demo_data_main_loop: "
@@ -71,6 +79,21 @@ ad_proc im_demo_data_main_loop {
 
 	}
 
+	# Create weekly project reports
+	set main_projects [db_list main_projects "
+		select	p.project_id
+		from	im_projects p
+		where	p.parent_id is null and
+			p.project_status_id in (select * from im_sub_categories([im_project_status_open]))
+	"]
+	foreach project_id $main_projects {
+	    # Create a weekly project status report on Thursday
+	    if {4 == $day_of_week} {
+		ns_log Notice "im_demo_data_main_loop: im_demo_data_status_report -project_id $project_id"
+		im_demo_data_status_report_create -day $day -project_id $project_id
+	    }
+	}
+
 	# Log hours for all employees
 	ns_log Notice "im_demo_data_main_loop: im_demo_data_timesheet_log_employee_hours"
 	im_demo_data_timesheet_log_employee_hours -day $day
@@ -85,6 +108,12 @@ ad_proc im_demo_data_main_loop {
 	set end_audit_tz [db_string end_audit_tz "select now() from dual" -default 0]
 	db_dml shift_audits "update im_audits set audit_date = :day where audit_id > :prev_audit_id"
 	db_dml shift_project_audits "update im_projects_audit set last_modified = :day where audit_id > :prev_audit_id"
+
+	# Write indicator results
+	im_indicator_evaluation_sweeper -day $day
+	# Cleanup indicator results later then today. These can't be correct...
+	db_dml del_indicator_results "delete from im_indicator_results where result_date::date > :day::date"
+
 	ns_log Notice "im_demo_data_main_loop: End"
     }
 }

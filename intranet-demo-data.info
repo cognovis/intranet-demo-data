@@ -10,7 +10,7 @@
     <inherit-templates-p>f</inherit-templates-p>
     <auto-mount>intranet-demo-data</auto-mount>
 
-    <version name="4.0.3.3.0" url="http://www.project-open.org/download/apm/intranet-demo-data-4.0.3.3.0.apm">
+    <version name="4.0.3.3.1" url="http://www.project-open.org/download/apm/intranet-demo-data-4.0.3.3.1.apm">
         <owner url="mailto:frank.bergmann@project-open.com">Frank Bergmann</owner>
         <summary>Creates ]po[ demo-data, so that demo server exhibit reasonable demo-content</summary>
         <vendor url="http://www.project-open.com/">]project-open[</vendor>
@@ -22,7 +22,7 @@
         <callbacks>
         </callbacks>
         <parameters>
-        <!-- No version parameters -->
+             <parameter datatype="string"  min_n_values="1"  max_n_values="1" name="DemoDataDay" default="" description="This parameter is set from the intranet-demo-data package when generating demo data. If set, the intranet-reporting-indicators will evaluate for this day. An empy value indicates normal operations."/>
         </parameters>
 
     </version>
