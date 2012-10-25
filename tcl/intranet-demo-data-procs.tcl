@@ -98,7 +98,10 @@ ad_proc im_demo_data_main_loop {
 	ns_log Notice "im_demo_data_main_loop: im_demo_data_timesheet_log_employee_hours"
 	im_demo_data_timesheet_log_employee_hours -day $day
 
-	# ToDo: Write invoices for "Delivered" projects
+	# Add payments for invoices
+	ns_log Notice "im_demo_data_main_loop: im_demo_data_pay_invoices -day $day"
+	im_demo_data_pay_invoices -day $day
+
 
 	# Patch costs objects
 	db_dml patch_costs "update im_costs set effective_date = :day where cost_id > :prev_object_id"

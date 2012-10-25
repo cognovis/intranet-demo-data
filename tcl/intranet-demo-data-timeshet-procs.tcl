@@ -118,6 +118,16 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 	if {"" == $day} { set day [db_string now "select now()::date - 365 from dual"] }
     }
 
+    # calculate day as integer
+    set day_julian [im_date_ansi_to_julian $day]
+    # Weekday starts with 0=sunday and ends with 6=saturday
+    set day_of_week [expr ($day_julian + 1) % 7]
+
+    # Don't log hours on Saturday and Sunday
+    if {0 == $day_of_week || 6 == $day_of_week} { 
+	return 
+    }
+
     # Default user for logging data
     set admin_user_id [db_string admin_user "select min(user_id) from users where user_id > 0" -default 0]
 
@@ -325,7 +335,7 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 
 	    # Check the super-project if all of it's sub-projects are closed already
 	    if {$new_project_status_id == [im_project_status_closed]} {
-	        im_demo_data_project_close_done_projects -project_id $parent_id
+	        im_demo_data_project_close_done_projects -day $day -project_id $parent_id
 	    }
 
 	    # Remember the modified projects

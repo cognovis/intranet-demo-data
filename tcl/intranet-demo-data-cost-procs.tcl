@@ -9,6 +9,80 @@ ad_library {
 }
 
 
+ad_proc im_demo_data_pay_invoices {
+    { -day ""}
+} {
+    Add payments for invoices
+} {
+    # Select out open invoices or bills
+    set invoices_sql "
+    	select	c.cost_id,
+		c.cost_name,
+		c.customer_id,
+		c.provider_id,
+		c.effective_date,
+		c.amount,
+		:day::date - c.effective_date::date - coalesce(c.payment_days, 30) as overdue_days
+	from	im_costs c,
+		im_invoices i
+	where	c.cost_id = i.invoice_id and
+		c.cost_type_id in ([im_cost_type_invoice], [im_cost_type_bill]) and
+		c.cost_status_id = [im_cost_status_created]
+    "
+
+    db_foreach invoices $invoices_sql {
+    	if {$overdue_days < 0.0} { continue }
+	
+	# Increase the probability for payments to arrive with the number of overdue days.
+	# First day=10%, 2nd day=20%, ..., multiplied with a random percentage with average 50%
+	set rand_perc [expr rand() * $overdue_days * 5.0]
+	ns_log Notice "im_demo_data_pay_invoices: day=$day, cost_name=$cost_name, rand_perc=$rand_perc"
+	if {$rand_perc > 95.0} {
+	    set payment_id [db_nextval "im_payments_id_seq"]
+	    if {$amount > 0} {
+		db_dml insert_payment "
+			insert into im_payments (
+				payment_id,
+				cost_id,
+				company_id,
+				provider_id,
+				amount,
+				currency,
+				received_date,
+				payment_type_id,
+				note,
+				last_modified,
+				last_modifying_user,
+				modified_ip_address
+			) values (
+				:payment_id,
+				:cost_id,
+				:customer_id,
+				:provider_id,
+				:amount,
+				'EUR',
+				:day::date,
+				'1000',
+				NULL,
+				:day::date,
+				[ad_get_user_id],
+				'[ns_conn peeraddr]'
+			)
+		"
+	    }
+	}
+	db_dml cost_paid "
+		update im_costs set 
+			cost_status_id = 3810,
+			paid_amount = :amount,
+			paid_currency = 'EUR'
+		where cost_id = :cost_id
+	"
+    }
+
+}
+
+
 ad_proc im_demo_data_cost_create {
     { -day ""}
     -cost_type_id:required
@@ -42,7 +116,7 @@ ad_proc im_demo_data_cost_create {
     set num_tasks [db_string num_tasks "select count(*) from ($project_task_sql) t"]
     
     if {$num_tasks > 10} {
-        set project_task_sql "
+	set project_task_sql "
 		select	p.project_id as task_id,
 			p.project_name as task_name,
 			(select sum(planned_units) from im_timesheet_tasks t where task_id in (
@@ -67,6 +141,7 @@ ad_proc im_demo_data_cost_create {
     set invoice_nr [im_next_invoice_nr -cost_type_id $cost_type_id]
     set invoice_status_id [im_cost_status_created]
     set invoice_type_id $cost_type_id
+    set cost_center_id [im_costs_default_cost_center_for_user $current_user_id]
     set invoice_id [db_string new_quote "
 	select im_invoice__new (
 		null,			-- invoice_id
@@ -112,7 +187,8 @@ ad_proc im_demo_data_cost_create {
 	update im_costs set
 		project_id	= :project_id,
 		cost_name	= :invoice_nr,
-		cost_nr		= :invoice_id
+		cost_nr		= :invoice_id,
+		cost_center_id	= :cost_center_id
 	where
 		cost_id = :invoice_id
     "
@@ -120,38 +196,38 @@ ad_proc im_demo_data_cost_create {
     set cnt 0
     db_foreach project_tasks $project_task_sql {
 	set item_id [db_nextval "im_invoice_items_seq"]
-        set insert_invoice_items_sql "
-        INSERT INTO im_invoice_items (
-                item_id, item_name,
-                project_id, invoice_id,
-                item_units, item_uom_id,
-                price_per_unit, currency,
-                sort_order, item_type_id,
-                item_material_id,
-                item_status_id, description, task_id
-        ) VALUES (
-                :item_id, :task_name,
-                :project_id, :invoice_id,
-                :planned_units, [im_uom_hour],
-                :default_hourly_rate, 'EUR',
-                :cnt, null,
-                null,
-                null, '', :task_id
+	set insert_invoice_items_sql "
+	INSERT INTO im_invoice_items (
+		item_id, item_name,
+		project_id, invoice_id,
+		item_units, item_uom_id,
+		price_per_unit, currency,
+		sort_order, item_type_id,
+		item_material_id,
+		item_status_id, description, task_id
+	) VALUES (
+		:item_id, :task_name,
+		:project_id, :invoice_id,
+		:planned_units, [im_uom_hour],
+		:default_hourly_rate, 'EUR',
+		:cnt, null,
+		null,
+		null, '', :task_id
 	)" 
-        db_dml insert_invoice_items $insert_invoice_items_sql
+	db_dml insert_invoice_items $insert_invoice_items_sql
 	incr cnt
     }
 
     # Link the invoice to the project
     set rel_id [db_exec_plsql create_rel "
       select acs_rel__new (
-             null,             -- rel_id
-             'relationship',   -- rel_type
-             :project_id,      -- object_id_one
-             :invoice_id,      -- object_id_two
-             null,             -- context_id
-             null,             -- creation_user
-             null             -- creation_ip
+	     null,	     -- rel_id
+	     'relationship',   -- rel_type
+	     :project_id,      -- object_id_one
+	     :invoice_id,      -- object_id_two
+	     null,	     -- context_id
+	     null,	     -- creation_user
+	     null	     -- creation_ip
       )
     "]
 }

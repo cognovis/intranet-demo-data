@@ -159,7 +159,10 @@ ad_proc im_demo_data_project_new_from_template {
     regsub -all "\\-" $template_body " " template_body
     set customer_name [db_string customer_name "select company_name from im_companies where company_id = :company_id" -default ""]
     if {"" == $customer_name} { ad_return_complaint 1 "im_demo_data_create_projects: invalid customer #$company_id" }
-    set project_name [concat $customer_name $template_body "($day)"]
+
+#    set project_name [concat $customer_name $template_body "($day)"]
+    set project_name [concat $template_body "($day)"]
+
     regsub -all "  " $project_name " " project_name
     
     set project_nr [im_next_project_nr]
@@ -457,6 +460,7 @@ ad_proc im_demo_data_project_staff {
 
 
 ad_proc im_demo_data_project_close_done_projects {
+    -day:required
     -project_id:required
 } {
     Check a project whether all of it's sub-projects are closed already.
@@ -483,7 +487,7 @@ ad_proc im_demo_data_project_close_done_projects {
 	# Main projects get the status "delivered" (ready for invoicing), while sub-projects get status "closed"
 	if {"" == $parent_id} { set sid [im_project_status_delivered] } else {set sid [im_project_status_closed] }
 
-	db_dml close_project "update im_projects set project_status_id = :sid where project_id = :project_id"
+	db_dml close_project "update im_projects set project_status_id = :sid, percent_completed = 100.0 where project_id = :project_id"
 	im_audit -object_id $project_id -action "after_update" -comment "close done projects: closing parents for finished tasks"
 
 	# Write an invoice for the project
@@ -492,7 +496,7 @@ ad_proc im_demo_data_project_close_done_projects {
 
 	if {"" != $parent_id} {
 	     # Recursive call to check super-projects
-	     im_demo_data_project_close_done_projects -project_id $parent_id
+	     im_demo_data_project_close_done_projects -day $day -project_id $parent_id
 	}
     }
 }
