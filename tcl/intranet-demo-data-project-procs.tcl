@@ -41,6 +41,7 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
     foreach pid [array names project_status_hash] {
     	set project_status_id $project_status_hash($pid)
 	set project_needs_shift_p 0
+	ns_log Notice "im_demo_data_project_sales_pipeline_advance: status=$project_status_id"
 
 	# Default potential project states.
 	# There may be added states with higher IDs which we'll ignore
@@ -50,28 +51,33 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
 	#        74 | Quoting
 	#        75 | Quote Out
 	#        76 | Open
-	ns_log Notice "im_demo_data_project_sales_pipeline_advance: status=$project_status_id"
-	switch $project_status_id {
-	    71 - 72 - 73 - 74 - 75 {
-	        # Advance the project to the next state with a certain probability.
-		# 4.0% corresponds to 25/2 days for every status change
-		set rand_perc [expr rand() * 100.0]
-		ns_log Notice "im_demo_data_project_sales_pipeline_advance: advance status: status=$project_status_id, advance_probability=$, rand_perc=$rand_perc"
-		if {$rand_perc < $advance_probability} {
-		    # Change the status to the next status.
-		    # Take advantage of the linear numbering and that 76=Open is the status after 75.
-		    ns_log Notice "im_demo_data_project_sales_pipeline_advance: advacding project=$pid to status [expr $project_status_id + 1]"
-		    db_dml status_other "update im_projects set project_status_id = (:project_status_id + 1) where project_id = :pid"
-		    im_audit -object_id $pid -comment "sales pipeline advance: Advancing project"
-		}
-	    }
-	    default {
-	        # Either 71 or some other user-defined status.
-		# Set the status immediately to 72.
-		ns_log Notice "im_demo_data_project_sales_pipeline_advance: updating project #$pid from status '$project_status_id' to status 'inquiring'"
-		db_dml status_other "update im_projects set project_status_id = 72 where project_id = :pid"
-		im_audit -object_id $pid -comment "sales pipeline advance: Found an unknown project status, setting to 72"
 
+	if {$project_status_id < 71 || $project_status_id > 75} {
+	    # Some other user-defined status. Set the status immediately to 71.
+	    ns_log Notice "im_demo_data_project_sales_pipeline_advance: updating project #$pid from status '$project_status_id' to status 'inquiring'"
+	    db_dml status_other "update im_projects set project_status_id = 71 where project_id = :pid"
+	    im_audit -object_id $pid -comment "sales pipeline advance: Found an unknown project status, setting to 72"
+	}
+	
+	# Advance the project to the next state with a certain probability.
+	# 4.0% corresponds to 25/2 days for every status change
+	set rand_perc [expr rand() * 100.0]
+	ns_log Notice "im_demo_data_project_sales_pipeline_advance: advance status: status=$project_status_id, advance_probability=$, rand_perc=$rand_perc"
+	if {$rand_perc < $advance_probability} {
+	    # Change the status to the next status.
+	    # Take advantage of the linear numbering and that 76=Open is the status after 75.
+	    ns_log Notice "im_demo_data_project_sales_pipeline_advance: advacding project=$pid to status [expr $project_status_id + 1]"
+	    set project_status_id [expr $project_status_id + 1]
+	    db_dml status_other "update im_projects set project_status_id = :project_status_id where project_id = :pid"
+	    im_audit -object_id $pid -comment "sales pipeline advance: Advancing project"
+
+	    # Special actions for special states
+	    switch $project_status_id {
+		74 {
+		    # Quoting: Create a quote document
+		    ns_log Notice "im_demo_data_project_sales_pipeline_advance: im_demo_data_cost_create_quote -day $day -project_id $project_id"
+		    im_demo_data_cost_create -day $day -cost_type_id [im_cost_type_quote] -project_id $project_id
+		}
 	    }
 	}
 
@@ -479,6 +485,10 @@ ad_proc im_demo_data_project_close_done_projects {
 
 	db_dml close_project "update im_projects set project_status_id = :sid where project_id = :project_id"
 	im_audit -object_id $project_id -action "after_update" -comment "close done projects: closing parents for finished tasks"
+
+	# Write an invoice for the project
+	ns_log Notice "im_demo_data_project_close_done_projects: im_demo_data_cost_create -day $day -cost_type_id [im_cost_type_invoice] -project_id $project_id"
+	im_demo_data_cost_create -day $day -cost_type_id [im_cost_type_invoice] -project_id $project_id
 
 	if {"" != $parent_id} {
 	     # Recursive call to check super-projects
