@@ -60,8 +60,11 @@ ad_proc im_demo_data_status_report_create {
     if {"" == $current_user_id} { set current_user_id [ad_get_user_id] }
 
     # Get the ID of the preconfigured survey
-    set survey_id [db_string survey "select survey_id from survsimp_surveys where name = 'Project Manager Weekly Report'" -default ""]
-    if {"" == $survey_id} { return "" }
+    set survey_id [db_string survey "select min(survey_id) from survsimp_surveys where name = 'Project Manager Weekly Report' or name = 'Project Status Report'" -default ""]
+    if {"" == $survey_id} { 
+	ns_log Error "im_demo_data_status_report_create: Didn't find a survey 'Project Manager Weekly Report' or 'Project Status Report'."
+	return "" 
+    }
 
     set project_task_names [db_list project_task_names "
  	select	p.project_name

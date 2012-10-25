@@ -16,7 +16,7 @@ ad_proc im_demo_data_main_loop {
     Run the company simulation for a number of days
 } {
     if {"" == $start_date} {  set start_date [db_string start_date "select max(day)::date + 1 from im_hours" -default ""] }
-    if {"" == $start_date} { set start_date "2010-01-01" }
+    if {"" == $start_date} { set start_date "2012-01-01" }
     set end_date [db_string max_days "select :start_date::date + :max_days::integer from dual"]
 
     set day_list [db_list days_list "select day.day from im_day_enumerator(:start_date, :end_date) day"]
