@@ -132,7 +132,7 @@ ad_proc im_demo_data_cost_create {
 			im_projects p
 		where	main_p.project_id = :project_id and
 			p.parent_id = main_p.project_id
-		order by tree_sortkey
+		order by p.tree_sortkey
 	"
     }
     set num_tasks [db_string num_tasks "select count(*) from ($project_task_sql) t"]
