@@ -136,7 +136,7 @@ ad_proc im_demo_data_cost_create {
 	"
     }
     set num_tasks [db_string num_tasks "select count(*) from ($project_task_sql) t"]
-    set sum_hours [db_string sum_hour "select sum(planned_units) from ($project_task_sql) t"]
+    set sum_hours [db_string sum_hour "select coalesce(sum(planned_units),0.0) from ($project_task_sql) t"]
 
     set invoice_nr [im_next_invoice_nr -cost_type_id $cost_type_id]
     set invoice_status_id [im_cost_status_created]

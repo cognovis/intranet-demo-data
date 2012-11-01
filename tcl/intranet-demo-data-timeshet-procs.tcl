@@ -320,10 +320,12 @@ ad_proc im_demo_data_timesheet_log_employee_hours {
 	    }
 	    ns_log Notice "im_demo_data_log_timesheet_hours: task(tid=$tid, est=$task_planned_units, compl=$task_percent_completed) gets $percent_done percent completed today"
 
-	    db_dml hours_insert "
+	    catch {
+		db_dml hours_insert "
 		insert into im_hours (user_id, project_id, day, hours) 
 		values (:uid, :tid, :day, :hours)
-	    "
+	        "
+	    }
 
 	    db_dml task_update "
 		update im_projects set 
