@@ -166,7 +166,7 @@ ad_proc im_demo_data_project_new_from_template {
     regsub -all "  " $project_name " " project_name
     
     set project_nr [im_next_project_nr]
-    set main_project_id [project::new \
+    set main_project_id [im_project::new \
 			-project_name $project_name \
 			-project_nr $project_nr \
 			-project_path $project_nr \
@@ -588,7 +588,7 @@ ad_proc im_demo_data_project_create_beaches {
 	" -default ""]
 
 	if {"" == $main_beach_id} {
-	    set main_beach_id [project::new \
+	    set main_beach_id [im_project::new \
 				   -project_name $beach_name \
 				   -project_nr $beach_nr \
 				   -project_path $beach_nr \
