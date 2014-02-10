@@ -8,7 +8,7 @@ ad_page_contract {
 
 } {
     { day:multiple "" }
-    return_url
+    { return_url "" }
 }
 
 # ******************************************************
@@ -30,9 +30,7 @@ set context [list [list "/intranet-dynfield/" "DynField"] [list "object-types" "
 # ******************************************************
 
 foreach d $day {
-    im_demo_data_create_beaches -day $d
-    im_demo_data_create_projects -day $d
-    im_demo_data_log_timesheet_hours -day $d
+    im_demo_data_main_loop -start_date $d -max_days 1
 }
 
 ad_returnredirect $return_url

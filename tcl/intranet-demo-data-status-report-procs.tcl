@@ -11,7 +11,7 @@ ad_library {
 
 
 
-ad_proc im_demo_data_status_report_duplicate_green_choices {
+ad_proc -public im_demo_data_status_report_duplicate_green_choices {
     options
 } {
     Takes a list of id-choice_text tuples and:
@@ -49,7 +49,7 @@ ad_proc im_demo_data_status_report_duplicate_green_choices {
 }
 
 
-ad_proc im_demo_data_status_report_create {
+ad_proc -public im_demo_data_status_report_create {
     { -day ""}
     { -current_user_id "" }
     -project_id:required

@@ -27,38 +27,37 @@ set return_url [im_url_with_query]
 # 
 # ******************************************************
 
-lappend action_list "Recalculate Day" "[export_vars -base "recalculate-day" {day}]" "Log hours for this day"
+set elements {
+    dow_pretty {
+	label "DoW" 
+    }
+    day {
+	label "Day" 
+    }
+    timesheet_hours_logged {
+	label "TS Hours" 
+    }
+    employees_available {
+	label "Emps Avail" 
+    }
+}
+
 
 list::create \
     -name days_list \
     -multirow days_multirow \
     -key day \
-    -actions $action_list \
     -no_data "No days pages" \
     -bulk_actions [list "Recalculate Day" recalculate-day "Recalculate Day"] \
     -bulk_action_export_vars { return_url } \
-    -bulk_action_method GET \
-    -elements {
-	day {
-	    label "Day" 
-	    link_url_col details_url
-	}
-	timesheet_hours_logged {
-	    label "TS Hours" 
-	}
-	employees_available {
-	    label "Emps Avail" 
-	}
-    } \
+    -bulk_action_method POST \
     -orderby {
 	page_url {orderby page_url}
 	days_type {orderby days_type}
 	default_p {orderby default_p}
     } \
-    -filters {
-	object_type {}
-    }
-
+    -filters { object_type {} } \
+    -elements $elements
 
 
 set days_multirow_sql "
@@ -70,12 +69,14 @@ set days_multirow_sql "
 		(	select	sum(h.hours)
 			from	im_hours h
 			where	h.day::date = day.day
-		) as timesheet_hours_logged
-	from	im_day_enumerator('2012-01-01', '2012-05-06') day
+		) as timesheet_hours_logged,
+		to_char(day.day, 'D') as dow_idx
+	from	im_day_enumerator('2013-01-01', now()::date) day
 	order by
 		day.day DESC
 "
 
-db_multirow -extend {delete_url} days_multirow get_pages $days_multirow_sql {
+db_multirow -extend {delete_url dow_pretty} days_multirow get_pages $days_multirow_sql {
     set delete_url [export_vars -base "days-del" { object_type page_url }]
+    set dow_pretty [lindex {"-" Sun Mon Tue Wed Thu Fri Sat "-"} $dow_idx]
 }

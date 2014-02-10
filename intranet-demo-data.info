@@ -17,7 +17,8 @@
         <description format="text/plain">Simulates timesheet logging of users on their assigned projects. The package also creates new projects if there are not enough projects for the users.</description>
         <maturity>0</maturity>
 
-        <provides url="intranet-demo-data" version="0.1d"/>
+        <provides url="intranet-demo-data" version="4.0.0.0.0"/>
+	<requires url="intranet-audit" version="4.0.0.0.0"/>
 
         <callbacks>
         </callbacks>

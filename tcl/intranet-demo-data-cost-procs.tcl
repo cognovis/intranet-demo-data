@@ -9,7 +9,7 @@ ad_library {
 }
 
 
-ad_proc im_demo_data_pay_invoices {
+ad_proc -public im_demo_data_pay_invoices {
     { -day ""}
 } {
     Add payments for invoices
@@ -83,7 +83,7 @@ ad_proc im_demo_data_pay_invoices {
 }
 
 
-ad_proc im_demo_data_cost_create {
+ad_proc -public im_demo_data_cost_create {
     { -day ""}
     -cost_type_id:required
     -project_id:required

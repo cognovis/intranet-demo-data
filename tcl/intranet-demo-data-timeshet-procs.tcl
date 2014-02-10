@@ -10,7 +10,7 @@ ad_library {
 
 
 
-ad_proc im_demo_data_timesheet_work_hours {
+ad_proc -public im_demo_data_timesheet_work_hours {
     -project_id:required
 } {
     Returns the accumulated estimated_hours of a project.
@@ -18,7 +18,8 @@ ad_proc im_demo_data_timesheet_work_hours {
     return [util_memoize [list im_demo_data_timesheet_work_hours_helper -project_id $project_id]]
 }
 
-ad_proc im_demo_data_timesheet_work_hours_helper {
+
+ad_proc -public im_demo_data_timesheet_work_hours_helper {
     -project_id:required
 } {
     Returns the accumulated estimated_hours of a project.
@@ -40,7 +41,8 @@ ad_proc im_demo_data_timesheet_work_hours_helper {
 }
 
 
-ad_proc im_demo_data_timesheet_company_load {
+
+ad_proc -public im_demo_data_timesheet_company_load {
     { -start_date ""}
     { -end_date ""}
     { -project_status_id "" }
@@ -85,7 +87,8 @@ ad_proc im_demo_data_timesheet_company_load {
     return [db_string workload $workload_sql]
 }
 
-ad_proc im_demo_data_timesheet_company_capacity_percentage {
+
+ad_proc -public im_demo_data_timesheet_company_capacity_percentage {
 } {
     Calculates the available percentage of users.
 } {
@@ -101,7 +104,7 @@ ad_proc im_demo_data_timesheet_company_capacity_percentage {
 
 
 
-ad_proc im_demo_data_timesheet_log_employee_hours {
+ad_proc -public im_demo_data_timesheet_log_employee_hours {
     {-day ""}
 } {
     Checks demo-data for a single day:

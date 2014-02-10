@@ -9,7 +9,7 @@ ad_library {
 }
 
 
-ad_proc im_demo_data_project_sales_pipeline_advance {
+ad_proc -public im_demo_data_project_sales_pipeline_advance {
     {-day ""}
     {-advance_probability 10.0}
     {-cancel_probability 0.5}
@@ -96,7 +96,7 @@ ad_proc im_demo_data_project_sales_pipeline_advance {
 
 
 
-ad_proc im_demo_data_project_new_from_template {
+ad_proc -public im_demo_data_project_new_from_template {
     {-day ""}
     {-debug_p 0}
     {-company_id ""}
@@ -158,7 +158,7 @@ ad_proc im_demo_data_project_new_from_template {
     if {[regexp {^(.*)\.[0-9]+\.xml} $template_body match t]} { set template_body $t }
     regsub -all "\\-" $template_body " " template_body
     set customer_name [db_string customer_name "select company_name from im_companies where company_id = :company_id" -default ""]
-    if {"" == $customer_name} { ad_return_complaint 1 "im_demo_data_create_projects: invalid customer #$company_id" }
+    if {"" == $customer_name} { ad_return_complaint 1 "im_demo_data_project_new_from_template: invalid customer #$company_id" }
 
 #    set project_name [concat $customer_name $template_body "($day)"]
     set project_name [concat $template_body "($day)"]
@@ -225,7 +225,7 @@ ad_proc im_demo_data_project_new_from_template {
 
 }
 
-ad_proc im_demo_data_project_clone {
+ad_proc -public im_demo_data_project_clone {
     {-template_id ""}
     {-new_start_date ""}
     {-company_id "" }
@@ -263,12 +263,12 @@ ad_proc im_demo_data_project_clone {
 
     if {"" == $project_name} {
 	set template_project_name [db_string template_name "select project_name from im_projects where project_id = :template_id" -default ""]
-	if {"" == $template_project_name} { ad_return_complaint 1 "im_demo_data_create_projects: invalid template #$template_id" }
+	if {"" == $template_project_name} { ad_return_complaint 1 "im_demo_data_project_clone: invalid template #$template_id" }
 	if {[regexp {^(.*)Template(.*)$} $template_project_name match tail end]} {
 	    set template_project_name [string trim [concat [string trim $tail] " " [string trim $end]]]
 	}
 	set customer_name [db_string customer_name "select company_name from im_companies where company_id = :company_id" -default ""]
-	if {"" == $customer_name} { ad_return_complaint 1 "im_demo_data_create_projects: invalid customer #$company_id" }
+	if {"" == $customer_name} { ad_return_complaint 1 "im_demo_data_project_clone: invalid customer #$company_id" }
 
 	set project_name [concat $customer_name $template_project_name]
     }
@@ -334,7 +334,7 @@ ad_proc im_demo_data_project_clone {
 
 
 
-ad_proc im_demo_data_project_staff {
+ad_proc -public im_demo_data_project_staff {
     -day:required
     -project_id:required
 } {
@@ -459,7 +459,7 @@ ad_proc im_demo_data_project_staff {
 
 
 
-ad_proc im_demo_data_project_close_done_projects {
+ad_proc -public im_demo_data_project_close_done_projects {
     -day:required
     -project_id:required
 } {
@@ -502,7 +502,7 @@ ad_proc im_demo_data_project_close_done_projects {
 }
 
 
-ad_proc im_demo_data_project_create_beaches {
+ad_proc -public im_demo_data_project_create_beaches {
     -day:required
 } {
     The "Beach" are the projects for non-productive hours.
