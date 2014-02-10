@@ -219,7 +219,25 @@ ad_proc -public im_demo_data_project_new_from_template {
     set status_id [im_project_status_potential]
     set total_main_projects [db_string total_main_projects "select count(*) from im_projects where parent_id is null"]
     if {$total_main_projects < 10} { set status_id [util::random_list_element {72 72 73 74 74 75 75 76}] }
-    db_dml status_potential "update im_projects set project_status_id = :status_id where project_id = :main_project_id"
+    set project_hours [db_string project_days "
+	select	coalesce(sum(coalesce(t.billable_units,0.0)), 50.0)
+	from	im_projects main_p,
+		im_projects sub_p,
+		im_timesheet_tasks t
+	where	main_p.project_id = :main_project_id and
+		sub_p.project_id = t.task_id and
+		sub_p.tree_sortkey between main_p.tree_sortkey and tree_right(main_p.tree_sortkey)
+    " -default 0]
+    set presales_price_per_hour [util::random_list_element {70 90 110 120 130 140 150 180}]
+    set presales_value [expr 10.0 * int($project_hours / 10.0) * $presales_price_per_hour]
+    set presales_probability [util::random_list_element {30 40 50 60 70 80 85 90 95}]
+    db_dml status_potential "
+	update im_projects set 
+		project_status_id = :status_id,
+		presales_probability = :presales_probability,
+		presales_value = :presales_value
+	where project_id = :main_project_id
+    "
 
     return $main_project_id
 
