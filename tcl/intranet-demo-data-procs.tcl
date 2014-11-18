@@ -122,3 +122,20 @@ ad_proc im_demo_data_main_loop {
 }
 
 
+
+ad_proc -public im_demo_data_poitsm_blurb_component { 
+} {
+    Shows a info message on "po*itsm" that a user can send a message
+    to the server.
+} {
+    # Only show on a server with name po*itsm 
+    set linux_user [util_memoize [list exec bash -c "whoami"]]
+
+    if {![regexp {^po[0-9]+itsm$} $linux_user match]} { return "" }
+    set params [list \
+                    [list return_url [im_url_with_query]] \
+		    ]
+
+    set result [ad_parse_template -params $params "/packages/intranet-demo-data/lib/poXYitsm-home-component"]
+    return [string trim $result]
+}
