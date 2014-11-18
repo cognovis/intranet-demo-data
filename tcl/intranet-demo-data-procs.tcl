@@ -128,6 +128,8 @@ ad_proc -public im_demo_data_poitsm_blurb_component {
     Shows a info message on "po*itsm" that a user can send a message
     to the server.
 } {
+    return ""
+
     # Only show on a server with name po*itsm 
     set linux_user [util_memoize [list exec bash -c "whoami"]]
 
