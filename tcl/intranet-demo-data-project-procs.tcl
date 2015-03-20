@@ -171,7 +171,7 @@ ad_proc -public im_demo_data_project_new_from_template {
 			-project_nr $project_nr \
 			-project_path $project_nr \
 			-company_id $company_id \
-			-project_type_id [im_project_type_consulting] \
+			-project_type_id [im_project_type_gantt] \
 			-project_status_id [im_project_status_open] \
     ]
     
